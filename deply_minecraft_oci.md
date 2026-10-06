@@ -1,12 +1,12 @@
-# How to deploy Minecraft Forge server on OCI 
-OCIの無料枠を利用してMinecraft Forge鯖をたてる手順
+# How to deploy Minecraft multiple servers on OCI 
+OCIの無料枠を利用して複数のMinecraft鯖(コンテナ)をたてる手順
 
 ---
 ## Requirements
 - Oracle Cloud Infrastracture(OCI)のFree Tierアカウント(https://www.oracle.com/jp/cloud/free/) 
   - Tokyo Regionはリソースに空きがないらしいのでOsakaを選択した方がいい
   - Free TierのままだとOsakaでもリソースがないというapiエラーになる。有料サブスクリプションにアップグレードしたら解決 (無料の範囲で使えば課金されない)
-  - 無料枠でおさめるならARM 4ocpu, 24GBRAMのLinuxインスタンス1個
+  - 無料枠でおさめるならARM 4ocpu, 24GBRAMのLinuxインスタンス1個 <- 無料枠が小さくなったので注意
 - SSHクライアント(e.g.PowerShell)
 - Java 1.17
 - Minecraft-forge 1.20.1 
@@ -15,9 +15,9 @@ OCIの無料枠を利用してMinecraft Forge鯖をたてる手順
 3,000 OCPU hours and 18,000 GB hours per month > 4OCPU & 24GB for a ARM VM per 31 days  
 ![Screenshot_25-12-2025_143824_www oracle com](https://github.com/user-attachments/assets/1f414f1f-7bd1-49dd-9450-87becf50aded) 
   
-  
+  <img width="361" height="411" alt="image" src="https://github.com/user-attachments/assets/1a667af5-7aaa-4ab9-a66e-988abd27955d" />
 
-  
+
 
 ---
 ## 1. Deployment & Configuration OCI env.   
@@ -103,14 +103,172 @@ ssh -i ~/[sssh key] opc@xx.xxx.xxx.xxx
 ## 2.Configure security rule for minecraft
 - Ingress ruleにマイクラ用のポートを追加 (vpn > subnet > Security rules)
   ![Screenshot_25-12-2025_132350_cloud oracle com](https://github.com/user-attachments/assets/10901b49-4ef2-452f-a7ee-2dcb43a7c172)
-  ![Screenshot_25-12-2025_13247_cloud oracle com](https://github.com/user-attachments/assets/5357bcd9-257e-499e-b81e-c45526af2cbd)
+  <img width="1256" height="755" alt="image" src="https://github.com/user-attachments/assets/9589662c-7378-4fe1-a34e-c71fbb28a259" />
+
   
 - Linux側もポートの穴あけ
  ```bash
- sudo firewall-cmd --add-port=25565/tcp --permanent 
+ sudo firewall-cmd --add-port=25565/tcp --permanent
+ sudo firewall-cmd --add-port=25566/tcp --permanent 
  sudo firewall-cmd --reload
 ```
   
+---
+## 3.Install Podman  
+- podmanをインストール 
+   ```bash
+  sudo dnf install -y podman 
+  ```
+- EPEL repoを有効にする 
+  ```bash
+  sudo dnf install -y oracle-epel-release-el9 
+  sudo dnf config-manager --enable ol9_developer_EPEL
+  sudo dnf install -y oracle-java-jdk-release-el*
+  dnf repolist 
+  ```
+- Composeのインストール  
+  ```bash
+  sudo dnf install -y podman-compose 
+  ```
+  ```bash
+  podman --version
+  podman-compose --version 
+  ```
+
+---
+## 4.Create a image with Minecraft server.jar as server1  
+- ディレクトリを作る
+ <img width="160" height="171" alt="image" src="https://github.com/user-attachments/assets/944febf3-d8ee-4609-ae24-aaca512aad26" />
+
+   ```
+   mkdir -p ~/minecraft/image
+   mkdir -p ~/minecraft/server1
+   mkdir -p ~/minecraft/server2
+   cd ~/minecraft 
+  ```
+- Minecraft server.jarを取得し保存
+ (https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar)
+   ```
+   cd ~/minecraft/image/
+   wget https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar
+   ```  
+
+- Containerfileを作る 
+  ```
+  cd ~/minecraft/image
+  vi Containerfile 
+  ```
+- dockerfileを作成  
+  ```
+  FROM container-registry.oracle.com/os/oraclelinux:9
+
+  RUN dnf -y update && \
+      dnf -y install java-25-openjdk-headless && \
+      dnf clean all && \
+      rm -rf /var/cache/dnf
+
+  RUN useradd -r -m -d /minecraft minecraft
+
+  WORKDIR /minecraft
+
+  COPY server.jar /opt/minecraft/server.jar
+
+  RUN chown -R minecraft:minecraft /minecraft /opt/minecraft
+
+  USER minecraft
+
+  EXPOSE 25565
+
+  ENTRYPOINT ["java"]
+  CMD ["-jar", "/opt/minecraft/server.jar", "nogui"] 
+  ```
+ 
+- コンテナイメージをBuild  
+  ```
+  cd ~/minecraft/image
+  podman build -t minecraft-server:latest . 
+  ```
+
+  - コンテナイメージの確認  
+  ```
+  podman images 
+  ```
+
+  - javaの確認 
+  ```
+  podman run --rm \
+  --entrypoint java \
+  localhost/minecraft-server:latest \
+  -version 
+  ```
+
+## 5.Create EULA files
+  - EULAファイルを作成
+  ```
+  echo "eula=true" > ~/minecraft/server1/eula.txt
+  echo "eula=true" > ~/minecraft/server2/eula.txt 
+  ```
+
+## 6.Run Minecraft#1
+  - コンテナを起動
+  ```
+  podman run -d \
+  --name minecraft1 \
+  --memory=10g \
+  -p 25565:25565 \
+  -v ~/minecraft/server1:/minecraft:Z,U \
+  localhost/minecraft-server:latest \
+  -Xms4G \
+  -Xmx8G \
+  -jar /opt/minecraft/server.jar \
+  nogui 
+  ```
+ 
+  - コンテナを確認
+  ```
+  podman ps
+  podman logs -f minecraft1
+  ```
+
+  - コンテナを停止/削除する場合
+  ```
+  podman stop minecraft1
+  podman rm minecraft1
+  ```
+
+  - cpu/mem確認
+  ```
+  podman stats
+  ```
+
+## 7.Change configurations
+  - server.propertiesを変更 (初回起動後)
+  ```
+  sudo vi ~/minecraft/server1/server.properties 
+  ```
+  ```
+  # 接続
+  online-mode=true
+  max-players=10
+
+  # ゲーム
+  gamemode=survival
+  difficulty=normal
+
+  # World
+  spawn-protection=16
+
+  # Performance
+  view-distance=8
+  simulation-distance=6
+
+  # Server list
+  motd=OCI Minecraft Server 1
+  ```
+
+
+
+
 ---
 ## 3.Install Java  
 - repositoryが設定されているか確認 
