@@ -1,2 +1,2 @@
-# minecraft-java-forge
-Installation and Configuration for Minecraft Forge
+# minecraft-java-multiservers
+Installation and Configuration for Multiple Minecraft Servers
