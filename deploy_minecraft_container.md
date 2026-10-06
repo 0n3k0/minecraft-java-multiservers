@@ -88,7 +88,7 @@
   --memory=10g \
   -p 25565:25565 \
   -v ~/minecraft/server1:/minecraft:Z,U \
-  localhost/minecraft-server:latest \
+  localhost/minecraft-server.26.3:latest \
   -Xms4G \
   -Xmx8G \
   -jar /opt/minecraft/server.jar \
