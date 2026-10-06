@@ -5,7 +5,7 @@
 ## Requirements
 - SSHクライアント(e.g.PowerShell)
 - Java 1.25
-- Minecraft 1.69.0 
+- Minecraft server.26.3 (https://www.minecraft.net/ja-jp/download/server)
 
 ---
 ## 1.Create a image with Minecraft server.jar as server1  
@@ -13,7 +13,7 @@
  <img width="160" height="171" alt="image" src="https://github.com/user-attachments/assets/944febf3-d8ee-4609-ae24-aaca512aad26" />
 
    ```
-   mkdir -p ~/minecraft/image
+   mkdir -p ~/minecraft/image1
    mkdir -p ~/minecraft/server1
    mkdir -p ~/minecraft/server2
    cd ~/minecraft 
@@ -27,7 +27,7 @@
 
 - Containerfileを作る 
   ```
-  cd ~/minecraft/image
+  cd ~/minecraft/image1
   vi Containerfile 
   ```
 - dockerfileを作成  
@@ -58,7 +58,7 @@
 - コンテナイメージをBuild  
   ```
   cd ~/minecraft/image
-  podman build -t minecraft-server:latest . 
+  podman build -t minecraft-server.26.3:latest . 
   ```
 
   - コンテナイメージの確認  
@@ -78,7 +78,6 @@
   - EULAファイルを作成
   ```
   echo "eula=true" > ~/minecraft/server1/eula.txt
-  echo "eula=true" > ~/minecraft/server2/eula.txt 
   ```
 
 ## 3.Run Minecraft#1
