@@ -1,14 +1,29 @@
 # How to build Minecraft forge container and deploy it 
 Minecraft forge鯖(コンテナ)をたてる手順
+<br>
+<br>
 
----
 ## Requirements
 - SSHクライアント(e.g.PowerShell)
 - Java 1.17
-- Minecraft-forge 1.20.1 
+- Minecraft-forge 1.20.1
+- 注: バックアップデータを利用
+<br>
+<br>
 
----
-## 1.Create Containerfile  
+## Table of Contents
+[1. Create a image](#1-Create-a-image)
+[2. Run the image](#2-Run-the-image)
+[3. Restore backup data](#3-Restore-backup-data)
+[4. Install Mod files](#4-Install-Mod-files)
+[5. Configure SELinux](#5-Configure-SELinux)
+
+
+
+<br>
+<br>
+
+## 1. Create a image  
 - ディレクトリ作成
   ```
   mkdir -p ~/minecraft/image2
@@ -148,15 +163,12 @@ echo "Starting Minecraft Forge..."
 
 exec ./run.sh nogui
 ```
+
 - 実行権限
 ```
 chmod +x entrypoint.sh
 ```
 
-
-
----
-## 2.Build a image  
 - イメージのビルド
   ```
   cd ~/minecraft/image2
@@ -170,9 +182,11 @@ chmod +x entrypoint.sh
   ```
   podman images
   ```
+<br>
+<br>
 
----
-## 3.Run the image  
+
+## 2. Run the image  
   - server2用永続ディレクトリの作成
   ```
   mkdir -p /home/opc/minecraft/server2
@@ -191,9 +205,10 @@ chmod +x entrypoint.sh
   podman stop minecraft2
   podman rm minecraft2
   ```
+<br>
+<br>
 
----
-## 4.Copy Backup data  
+## 3. Restore backup data  
   - 現在のworldを念のため退避
   ```
   sudo mv \
@@ -207,16 +222,19 @@ chmod +x entrypoint.sh
   /opt/minecraft/world \
   /home/opc/minecraft/server2/world
   ```
+<br>
+<br>
 
----
-## 5.Install Mod files  
+## 4. Install Mod files  
   - modファイルをコピー
   ```
   sudo cp /home/opc/mods/* ~/minecraft/server2/mods
   ```
+<br>
+<br>
 
----
-## 6.Configure SELinux  
+
+## 5. Configure SELinux  
   - 現在のSELinux状態を確認(おそらくEnforcing)
   ```
   getenforce
@@ -244,6 +262,7 @@ chmod +x entrypoint.sh
   ```
   podman unshare chown -R 999:999 /home/opc/minecraft/server2
   ```
+  - 注: パーミッションの問題で起動できなかったのでいろいろトラシューした残骸。。
   ```
   sudo chown -R opc:opc /home/opc/minecraft/server2
   ls -ln /home/opc/minecraft/server2/mods/ | head
