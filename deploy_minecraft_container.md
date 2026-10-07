@@ -1,4 +1,4 @@
-# How to build Minecraft Container and deploy it 
+# How to build Minecraft container and deploy it 
 Minecraftコンテナ(バニラ)を作成しOCI(Oracle Linux9)にコンテナをデプロイする手順
 <br>
 <br>
