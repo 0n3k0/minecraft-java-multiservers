@@ -138,7 +138,7 @@
   motd=OCI Minecraft Server 1
   ```
 ---
-## 5.Set whitelist
+## 5.Enable whitelist
   - Whitelistを有効化
   ```
   podman exec minecraft1 sed -i 's/^white-list=.*/white-list=true/' /minecraft/server.properties
@@ -176,4 +176,27 @@ podman exec minecraft1 sed -i 's/^rcon.password=.*/rcon.password=YOUR_STRONG_PAS
   podman port minecraft1
   ```
 
-  
+---
+## 6.Install mcrcon
+  - mcrcon をインストール
+  ```
+  sudo dnf install -y git gcc make 
+  ```
+  ```
+  cd /tmp
+  git clone https://github.com/Tiiffi/mcrcon.git
+  cd mcrcon
+  make
+  sudo install -m 755 mcrcon /usr/local/bin/mcrcon
+  ```
+  - 確認
+  ```
+  mcrcon -v
+  ```
+  - RCON接続をテスト
+  ```
+  mcrcon -H 127.0.0.1 -P 25575 -p 'MY PASSWORD' "list"
+  ```
+
+
+
