@@ -73,13 +73,13 @@
   localhost/minecraft-server:latest \
   -version 
   ```
-
+---
 ## 2.Create EULA files
   - EULAファイルを作成
   ```
   echo "eula=true" > ~/minecraft/server1/eula.txt
   ```
-
+---
 ## 3.Run Minecraft#1
   - コンテナを起動
   ```
@@ -87,6 +87,7 @@
   --name minecraft1 \
   --memory=10g \
   -p 25565:25565 \
+  -p 127.0.0.1:25575:25575 \
   -v ~/minecraft/server1:/minecraft:Z,U \
   localhost/minecraft-server.26.3:latest \
   -Xms4G \
@@ -111,7 +112,7 @@
   ```
   podman stats
   ```
-
+---
 ## 4.Change Configuration
   - server.propertiesを変更 (初回起動後)
   ```
@@ -136,3 +137,43 @@
   # Server list
   motd=OCI Minecraft Server 1
   ```
+---
+## 5.Set whitelist
+  - Whitelistを有効化
+  ```
+  podman exec minecraft1 sed -i 's/^white-list=.*/white-list=true/' /minecraft/server.properties
+
+  podman exec minecraft1 sed -i 's/^enforce-whitelist=.*/enforce-whitelist=true/' /minecraft/server.properties 
+  ```
+
+  - RCONパスワードを設定
+  ```
+  podman exec minecraft1 sed -i 's/^enable-rcon=.*/enable-rcon=true/' /minecraft/server.properties
+
+podman exec minecraft1 sed -i 's/^rcon.password=.*/rcon.password=YOUR_STRONG_PASSWORD/' /minecraft/server.properties 
+  ```
+
+- 確認
+  ```
+  podman exec minecraft1 grep -E '^(enable-rcon|rcon.port)=' /minecraft/server.properties 
+  ```
+
+- 起動
+  ```
+  podman run -d \
+  --name minecraft1 \
+  --memory=10g \
+  -p 25565:25565 \
+  -p 127.0.0.1:25575:25575 \
+  -v ~/minecraft/server1:/minecraft:Z,U \
+  localhost/minecraft-server.26.3:latest \
+  -Xms4G \
+  -Xmx8G \
+  -jar /opt/minecraft/server.jar \
+  nogui 
+  ```
+  ```
+  podman port minecraft1
+  ```
+
+  
