@@ -12,11 +12,13 @@ Minecraft forge鯖(コンテナ)をたてる手順
 <br>
 
 ## Table of Contents
-[1. Create a image](#1-Create-a-image)
-[2. Run the image](#2-Run-the-image)
-[3. Restore backup data](#3-Restore-backup-data)
-[4. Install Mod files](#4-Install-Mod-files)
-[5. Configure SELinux](#5-Configure-SELinux)
+[1. Create a image](#1-Create-a-image)  
+[2. Run the image](#2-Run-the-image)  
+[3. Restore backup data](#3-Restore-backup-data)  
+[4. Install Mod files](#4-Install-Mod-files)  
+[5. Configure SELinux](#5-Configure-SELinux)  
+[6. Run Minecraft-forge server](#6-Run-Minecraft-forge-server)  
+[7. Configure systemd](#7-Configure-systemd)  
 
 
 
@@ -262,7 +264,7 @@ chmod +x entrypoint.sh
   ```
   podman unshare chown -R 999:999 /home/opc/minecraft/server2
   ```
-  - 注: パーミッションの問題で起動できなかったのでいろいろトラシューした残骸。。
+  - 注: パーミッションの問題で起動できなかったのでいろいろトラシューした残骸コマンド
   ```
   sudo chown -R opc:opc /home/opc/minecraft/server2
   ls -ln /home/opc/minecraft/server2/mods/ | head
@@ -284,8 +286,10 @@ chmod +x entrypoint.sh
   -c 'id; ls -ldZ /minecraft; touch /minecraft/selinux-test && rm /minecraft/selinux-test'
   ```
 
----
-## 7.Run Minecraft-forge server  
+<br>
+<br>
+
+## 6. Run Minecraft-forge server  
   - server2として起動
   ```
   podman run -d \
@@ -300,8 +304,10 @@ chmod +x entrypoint.sh
   podman rm minecraft2
   ```
 
----
-## 8.Configure systemd  
+<br>
+<br>
+
+## 7. Configure systemd  
   - opcをログアウトしてもuser systemdを維持するように設定
   ```
   sudo loginctl enable-linger opc
