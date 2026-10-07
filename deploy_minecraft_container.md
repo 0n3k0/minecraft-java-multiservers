@@ -1,14 +1,27 @@
 # How to build Minecraft Container and deploy it 
-バニラなMinecraftコンテナを作成し、OCI(Oracle Linux9)にデプロイする手順
+Minecraftコンテナ(バニラ)を作成しOCI(Oracle Linux9)にコンテナをデプロイする手順
+<br>
+<br>
 
----
 ## Requirements
 - SSHクライアント(e.g.PowerShell)
 - Java 1.25
 - Minecraft server.26.3 (https://www.minecraft.net/ja-jp/download/server)
+<br>
+<br>
 
----
-## 1.Create a image with Minecraft server.jar as server1  
+## Table of Contents
+[1. Create a image](#1-Create-a-image)  
+[2. Create EULA file](#2-Create-EULA-file)  
+[3. Run Minecraft container](#3-Run-Minecraft-container)  
+[4. Change configuration](#4-Change-configuration)  
+[5. Enable whitelist](#5-Enable-whitelist)  
+[6. Install RCON](#6-Install-RCON)  
+
+<br>
+<br>
+
+## 1. Create a image  
 - ディレクトリを作る
  <img width="160" height="171" alt="image" src="https://github.com/user-attachments/assets/944febf3-d8ee-4609-ae24-aaca512aad26" />
 
@@ -73,14 +86,18 @@
   localhost/minecraft-server:latest \
   -version 
   ```
----
-## 2.Create EULA files
+<br>
+<br>
+
+## 2. Create EULA file
   - EULAファイルを作成
   ```
   echo "eula=true" > ~/minecraft/server1/eula.txt
   ```
----
-## 3.Run Minecraft#1
+<br>
+<br>
+
+## 3. Run Minecraft container
   - コンテナを起動
   ```
   podman run -d \
@@ -112,8 +129,10 @@
   ```
   podman stats
   ```
----
-## 4.Change Configuration
+<br>
+<br>
+
+## 4. Change configuration
   - server.propertiesを変更 (初回起動後)
   ```
   sudo vi ~/minecraft/server1/server.properties 
@@ -137,8 +156,10 @@
   # Server list
   motd=OCI Minecraft Server 1
   ```
----
-## 5.Enable whitelist
+<br>
+<br>
+
+## 5. Enable whitelist
   - Whitelistを有効化
   ```
   podman exec minecraft1 sed -i 's/^white-list=.*/white-list=true/' /minecraft/server.properties
@@ -175,9 +196,10 @@ podman exec minecraft1 sed -i 's/^rcon.password=.*/rcon.password=YOUR_STRONG_PAS
   ```
   podman port minecraft1
   ```
+<br>
+<br>
 
----
-## 6.Install mcrcon
+## 6. Install RCON
   - mcrcon をインストール
   ```
   sudo dnf install -y git gcc make 
