@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import os
 import time
+import threading
 
 
 # ============================================================
@@ -12,39 +13,79 @@ import time
 
 app = FastAPI()
 
-# Forge server2 data directory
 MOD_DIR = Path("/home/opc/minecraft/server2/mods")
 
-# Podman container name
 CONTAINER = "minecraft2"
 
-# RCON configuration
 RCON_HOST = "127.0.0.1"
 RCON_PORT = "25576"
 RCON_PASS = os.environ.get("MCRCON_PASS")
 
-# Maximum MOD upload size: 500 MB
 MAX_UPLOAD_SIZE = 500 * 1024 * 1024
 
-# Maximum time to wait for clean shutdown
 STOP_TIMEOUT = 120
-
-# Maximum time to wait for Forge to become Ready
 FORGE_READY_TIMEOUT = 300
 
-# Forge startup completion string
 FORGE_READY_TEXT = 'For help, type "help"'
 
 MOD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# Utility Functions
+# Restart State
+# ============================================================
+
+restart_lock = threading.Lock()
+
+restart_state = {
+    "in_progress": False,
+    "phase": None,
+    "message": "",
+    "error": None,
+}
+
+
+def set_restart_state(
+    *,
+    in_progress=None,
+    phase=None,
+    message=None,
+    error=None
+):
+    """
+    Update restart state safely.
+    """
+
+    with restart_lock:
+
+        if in_progress is not None:
+            restart_state["in_progress"] = in_progress
+
+        if phase is not None:
+            restart_state["phase"] = phase
+
+        if message is not None:
+            restart_state["message"] = message
+
+        restart_state["error"] = error
+
+
+def get_restart_state():
+    """
+    Return a copy of restart state.
+    """
+
+    with restart_lock:
+        return dict(restart_state)
+
+
+# ============================================================
+# Podman Helpers
 # ============================================================
 
 def podman(*args, timeout=30):
     """
-    Execute a Podman command and return stdout.
+    Execute Podman command.
     """
 
     result = subprocess.run(
@@ -55,6 +96,7 @@ def podman(*args, timeout=30):
     )
 
     if result.returncode != 0:
+
         raise RuntimeError(
             result.stderr.strip()
             or result.stdout.strip()
@@ -66,66 +108,37 @@ def podman(*args, timeout=30):
 
 def get_container_status():
     """
-    Return Podman container status.
+    Return container status.
     """
 
     try:
+
         return podman(
             "inspect",
             "-f",
             "{{.State.Status}}",
             CONTAINER
         )
+
     except Exception:
+
         return "unknown"
 
 
-def get_container_started_at():
+def get_container_logs(tail=300):
     """
-    Return the current container start time in RFC3339 format.
+    Read recent container logs.
 
-    Example:
-        2026-10-08T00:12:34.123456789Z
-
-    This value changes each time the container is started.
-    """
-
-    try:
-        started_at = podman(
-            "inspect",
-            "-f",
-            "{{.State.StartedAt}}",
-            CONTAINER
-        )
-
-        if not started_at:
-            return None
-
-        # Podman may return the zero-value timestamp if the
-        # container has never been started.
-        if started_at.startswith("0001-01-01"):
-            return None
-
-        return started_at
-
-    except Exception:
-        return None
-
-
-def get_logs_since(timestamp: str):
-    """
-    Return container logs generated since timestamp.
-
-    stdout and stderr are combined because container log
-    output may appear on either stream.
+    stdout/stderr are combined because Podman may emit
+    container logs on either stream.
     """
 
     result = subprocess.run(
         [
             "podman",
             "logs",
-            "--since",
-            timestamp,
+            "--tail",
+            str(tail),
             CONTAINER
         ],
         capture_output=True,
@@ -134,119 +147,119 @@ def get_logs_since(timestamp: str):
     )
 
     if result.returncode != 0:
+
         raise RuntimeError(
             result.stderr.strip()
             or result.stdout.strip()
             or "Unable to read container logs"
         )
 
-    output = ""
-
-    if result.stdout:
-        output += result.stdout
-
-    if result.stderr:
-        output += result.stderr
-
-    return output
+    return (
+        (result.stdout or "")
+        +
+        (result.stderr or "")
+    )
 
 
-def get_current_startup_logs():
+# ============================================================
+# Forge Ready Detection
+# ============================================================
+
+def get_current_run_logs():
     """
-    Return logs belonging only to the current container run.
+    Return logs for the current container run.
 
-    The container's actual StartedAt timestamp is obtained
-    from Podman, so old Forge startup logs are excluded.
+    Important:
+
+    We intentionally do NOT use:
+
+        podman inspect .State.StartedAt
+        podman logs --since <StartedAt>
+
+    because the timestamp format returned by Podman can vary.
+
+    Instead, the restart worker records the current log line
+    count immediately after podman start and uses that as the
+    beginning of the new startup log.
+
+    Outside a Web restart, Ready detection falls back to
+    recent logs.
     """
 
-    started_at = get_container_started_at()
-
-    if not started_at:
-        return ""
-
-    return get_logs_since(started_at)
+    return get_container_logs(1000)
 
 
 def is_forge_ready():
     """
-    Determine whether the CURRENT Forge instance is Ready.
+    Determine whether Forge appears Ready.
 
-    Old 'Done' messages from previous runs are ignored.
+    During an active restart, the restart worker is the
+    authoritative source of state.
+
+    Outside restart processing, recent logs are checked.
     """
 
-    if get_container_status() != "running":
+    status = get_container_status()
+
+    if status != "running":
         return False
 
+    state = get_restart_state()
+
+    if state["in_progress"]:
+
+        return state["phase"] == "ready"
+
     try:
-        logs = get_current_startup_logs()
+
+        logs = get_current_run_logs()
 
         return FORGE_READY_TEXT in logs
 
     except Exception:
+
         return False
 
 
-def safe_mod_name(filename: str) -> str:
-    """
-    Validate MOD filename.
-    """
-
-    if not filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Filename is missing"
-        )
-
-    name = Path(filename).name
-
-    if name in ("", ".", ".."):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid filename"
-        )
-
-    if not name.lower().endswith(".jar"):
-        raise HTTPException(
-            status_code=400,
-            detail="Only .jar files are allowed"
-        )
-
-    return name
-
+# ============================================================
+# RCON
+# ============================================================
 
 def send_rcon(command: str):
     """
-    Send command to Minecraft through localhost-only RCON.
+    Send Minecraft command through RCON.
     """
 
     if not RCON_PASS:
+
         raise RuntimeError(
             "MCRCON_PASS is not configured"
         )
 
-    result = subprocess.run(
+    return subprocess.run(
         [
             "mcrcon",
-            "-H", RCON_HOST,
-            "-P", RCON_PORT,
-            "-p", RCON_PASS,
+            "-H",
+            RCON_HOST,
+            "-P",
+            RCON_PORT,
+            "-p",
+            RCON_PASS,
             command
         ],
         capture_output=True,
         text=True,
-        timeout=10
+        timeout=15
     )
 
-    # The "stop" command can close the RCON connection while
-    # mcrcon is still waiting for a response. Therefore the
-    # return code alone is not used as shutdown success.
-    return result
 
+# ============================================================
+# Restart Helpers
+# ============================================================
 
 def wait_for_clean_stop():
     """
-    Wait until the container exits after Minecraft receives
-    the RCON stop command.
+    Wait for Minecraft container to exit cleanly.
     """
 
     deadline = time.time() + STOP_TIMEOUT
@@ -266,26 +279,54 @@ def wait_for_clean_stop():
     return False
 
 
+def wait_for_container_running():
+    """
+    Wait briefly for Podman container to enter running state.
+    """
+
+    deadline = time.time() + 30
+
+    while time.time() < deadline:
+
+        if get_container_status() == "running":
+            return True
+
+        time.sleep(1)
+
+    return False
+
+
 def wait_for_forge_ready():
     """
-    Wait until the CURRENT Forge startup emits its Ready text.
+    Wait for the NEW Forge startup to reach Done.
 
-    The Podman StartedAt value is used to ensure that only
-    logs from the current container run are inspected.
+    The log baseline is captured immediately after the
+    container has started.
 
-    Returns:
-        (True, logs)
-        (False, logs)
+    Only log content appearing after that baseline is used
+    for Ready detection.
     """
 
+    if not wait_for_container_running():
+        return False, "Container did not enter running state"
+
+    # Allow logging subsystem to settle.
+    time.sleep(1)
+
+    try:
+        baseline_logs = get_container_logs(10000)
+    except Exception:
+        baseline_logs = ""
+
+    baseline_length = len(baseline_logs)
+
     deadline = time.time() + FORGE_READY_TIMEOUT
-    last_logs = ""
+    latest_new_logs = ""
 
     while time.time() < deadline:
 
         status = get_container_status()
 
-        # Forge/container crashed during startup.
         if status in (
             "exited",
             "stopped",
@@ -293,65 +334,261 @@ def wait_for_forge_ready():
         ):
 
             try:
-                last_logs = get_current_startup_logs()
+                all_logs = get_container_logs(10000)
+
+                latest_new_logs = all_logs[
+                    baseline_length:
+                ]
+
             except Exception:
                 pass
 
-            return False, last_logs
+            return False, latest_new_logs
 
-        if status == "running":
+        try:
 
-            try:
-                last_logs = get_current_startup_logs()
+            all_logs = get_container_logs(10000)
 
-                if FORGE_READY_TEXT in last_logs:
-                    return True, last_logs
+            if len(all_logs) >= baseline_length:
 
-            except Exception:
-                # Container may have only just started.
-                # Retry rather than immediately failing.
-                pass
+                latest_new_logs = all_logs[
+                    baseline_length:
+                ]
+
+            else:
+                # Log rotation/truncation happened.
+                latest_new_logs = all_logs
+
+            if FORGE_READY_TEXT in latest_new_logs:
+
+                return True, latest_new_logs
+
+        except Exception:
+            pass
 
         time.sleep(2)
 
-    return False, last_logs
+    return False, latest_new_logs
 
+
+# ============================================================
+# Restart Worker
+# ============================================================
+
+def restart_worker():
+    """
+    Background restart sequence.
+
+    RCON stop
+        ->
+    clean shutdown
+        ->
+    podman start
+        ->
+    wait for Forge Done
+        ->
+    Ready
+    """
+
+    try:
+
+        # ----------------------------------------------------
+        # Phase 1: Stopping
+        # ----------------------------------------------------
+
+        set_restart_state(
+            in_progress=True,
+            phase="stopping",
+            message=(
+                "Saving world and stopping Minecraft..."
+            ),
+            error=None
+        )
+
+        current_status = get_container_status()
+
+        if current_status != "running":
+
+            raise RuntimeError(
+                "minecraft2 is not running. "
+                f"Current status: {current_status}"
+            )
+
+        result = send_rcon("stop")
+
+        # mcrcon can lose the RCON connection because Minecraft
+        # closes RCON during shutdown. Therefore a non-zero
+        # return code is not automatically treated as failure.
+
+        if not wait_for_clean_stop():
+
+            raise RuntimeError(
+                "Minecraft did not stop cleanly within "
+                f"{STOP_TIMEOUT} seconds. "
+                "The server was NOT force-killed."
+            )
+
+        # ----------------------------------------------------
+        # Phase 2: Starting container
+        # ----------------------------------------------------
+
+        set_restart_state(
+            phase="starting",
+            message=(
+                "Minecraft stopped. Starting Forge..."
+            )
+        )
+
+        podman(
+            "start",
+            CONTAINER
+        )
+
+        if not wait_for_container_running():
+
+            raise RuntimeError(
+                "minecraft2 failed to enter running state"
+            )
+
+        # ----------------------------------------------------
+        # Phase 3: Waiting for Forge
+        # ----------------------------------------------------
+
+        set_restart_state(
+            phase="waiting",
+            message=(
+                "Waiting for Forge startup..."
+            )
+        )
+
+        ready, startup_logs = wait_for_forge_ready()
+
+        if not ready:
+
+            final_status = get_container_status()
+
+            lines = (
+                startup_logs
+                .strip()
+                .splitlines()
+            )
+
+            log_tail = "\n".join(
+                lines[-20:]
+            )
+
+            raise RuntimeError(
+                "Forge did not become Ready within "
+                f"{FORGE_READY_TIMEOUT} seconds. "
+                f"Container status: {final_status}\n\n"
+                "Last startup logs:\n"
+                f"{log_tail}"
+            )
+
+        # ----------------------------------------------------
+        # Phase 4: Ready
+        # ----------------------------------------------------
+
+        set_restart_state(
+            in_progress=False,
+            phase="ready",
+            message="Forge is Ready",
+            error=None
+        )
+
+    except Exception as e:
+
+        set_restart_state(
+            in_progress=False,
+            phase="failed",
+            message="Restart failed",
+            error=str(e)
+        )
+
+
+# ============================================================
+# MOD Helpers
+# ============================================================
+
+def safe_mod_name(filename: str) -> str:
+
+    if not filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Filename is missing"
+        )
+
+    name = Path(filename).name
+
+    if name in (
+        "",
+        ".",
+        ".."
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename"
+        )
+
+    if not name.lower().endswith(".jar"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Only .jar files are allowed"
+        )
+
+    return name
+
+
+# ============================================================
+# Display Status
+# ============================================================
 
 def get_display_status():
     """
-    Return the status displayed by the Web UI.
-
-    Ready:
-        Container is running AND the current startup logs
-        contain Forge's Ready message.
-
-    Running / Starting:
-        Container is running but current Forge startup has
-        not reached Ready yet.
-
-    Exited / Stopped / Dead / Unknown:
-        Container is not running.
+    Return UI server status.
     """
 
-    container_status = get_container_status()
+    state = get_restart_state()
 
-    if container_status == "running":
+    if state["in_progress"]:
+
+        phase = state["phase"]
+
+        if phase == "stopping":
+            return "Stopping..."
+
+        if phase == "starting":
+            return "Starting..."
+
+        if phase == "waiting":
+            return "Waiting for Forge..."
+
+    if state["phase"] == "failed":
+
+        return "Restart Failed"
+
+    status = get_container_status()
+
+    if status == "running":
 
         if is_forge_ready():
             return "Ready"
 
         return "Running / Starting"
 
-    if container_status == "exited":
+    if status == "exited":
         return "Exited"
 
-    if container_status == "stopped":
+    if status == "stopped":
         return "Stopped"
 
-    if container_status == "dead":
+    if status == "dead":
         return "Dead"
 
-    return container_status.capitalize()
+    return status.capitalize()
 
 
 # ============================================================
@@ -558,9 +795,7 @@ Upload
 <h2>Server Log</h2>
 
 <button onclick="loadLogs()">
-
 Refresh Log
-
 </button>
 
 <pre id="logs">
@@ -577,7 +812,7 @@ Loading...
 
 
 // ============================================================
-// Server Status
+// Status
 // ============================================================
 
 async function loadStatus() {
@@ -595,6 +830,17 @@ async function loadStatus() {
                 'status'
             );
 
+        const message =
+            document.getElementById(
+                'message'
+            );
+
+        const restartButton =
+            document.getElementById(
+                'restartButton'
+            );
+
+
         status.innerText =
             data.status;
 
@@ -605,6 +851,7 @@ async function loadStatus() {
                 'status-ready';
 
         } else if (
+            data.in_progress ||
             data.status === 'Running / Starting'
         ) {
 
@@ -616,6 +863,29 @@ async function loadStatus() {
             status.className =
                 'status-other';
         }
+
+
+        restartButton.disabled =
+            data.in_progress;
+
+
+        if (
+            data.message
+        ) {
+
+            message.innerText =
+                data.message;
+        }
+
+
+        if (
+            data.error
+        ) {
+
+            message.innerText =
+                data.error;
+        }
+
 
     } catch (error) {
 
@@ -629,6 +899,96 @@ async function loadStatus() {
 
         status.className =
             'status-other';
+    }
+}
+
+
+// ============================================================
+// Restart
+// ============================================================
+
+async function restartServer() {
+
+    if (
+        !confirm(
+            'Restart minecraft2?\\n\\n' +
+            'The world will be saved before restart.'
+        )
+    ) {
+
+        return;
+    }
+
+
+    const button =
+        document.getElementById(
+            'restartButton'
+        );
+
+    const message =
+        document.getElementById(
+            'message'
+        );
+
+
+    button.disabled =
+        true;
+
+    message.innerText =
+        'Starting restart...';
+
+
+    try {
+
+        const r =
+            await fetch(
+                '/api/restart',
+                {
+                    method: 'POST'
+                }
+            );
+
+
+        const data =
+            await r.json();
+
+
+        if (!r.ok) {
+
+            message.innerText =
+                data.detail ||
+                'Restart failed';
+
+            button.disabled =
+                false;
+
+            return;
+        }
+
+
+        /*
+         * Restart now runs in a background thread.
+         *
+         * The browser does NOT wait several minutes for
+         * /api/restart.
+         *
+         * loadStatus() polls the current restart state.
+         */
+
+        message.innerText =
+            data.message;
+
+
+        await loadStatus();
+
+
+    } catch (error) {
+
+        message.innerText =
+            'Restart request failed';
+
+        button.disabled =
+            false;
     }
 }
 
@@ -652,7 +1012,8 @@ async function loadMods() {
                 'mods'
             );
 
-        ul.innerHTML = '';
+        ul.innerHTML =
+            '';
 
 
         if (!r.ok) {
@@ -665,7 +1026,9 @@ async function loadMods() {
             li.innerText =
                 'Unable to load MOD list';
 
-            ul.appendChild(li);
+            ul.appendChild(
+                li
+            );
 
             return;
         }
@@ -681,100 +1044,105 @@ async function loadMods() {
             li.innerText =
                 'No MOD files found';
 
-            ul.appendChild(li);
+            ul.appendChild(
+                li
+            );
 
             return;
         }
 
 
-        data.mods.forEach(mod => {
+        data.mods.forEach(
+            mod => {
 
-            const li =
-                document.createElement(
-                    'li'
+                const li =
+                    document.createElement(
+                        'li'
+                    );
+
+                li.appendChild(
+                    document.createTextNode(
+                        mod + ' '
+                    )
                 );
 
-            li.appendChild(
-                document.createTextNode(
-                    mod + ' '
-                )
-            );
+
+                const button =
+                    document.createElement(
+                        'button'
+                    );
+
+                button.innerText =
+                    'Delete';
+
+                button.className =
+                    'delete-button';
 
 
-            const button =
-                document.createElement(
-                    'button'
-                );
+                button.onclick =
+                    async () => {
 
-            button.innerText =
-                'Delete';
+                        if (
+                            !confirm(
+                                'Delete ' +
+                                mod +
+                                '?\\n\\n' +
+                                'Server restart will be required.'
+                            )
+                        ) {
+                            return;
+                        }
 
-            button.className =
-                'delete-button';
+
+                        const r =
+                            await fetch(
+                                '/api/mods/' +
+                                encodeURIComponent(
+                                    mod
+                                ),
+                                {
+                                    method: 'DELETE'
+                                }
+                            );
 
 
-            button.onclick =
-                async () => {
+                        const data =
+                            await r.json();
 
-                    if (
-                        !confirm(
-                            'Delete ' +
+
+                        if (!r.ok) {
+
+                            alert(
+                                data.detail ||
+                                'Delete failed'
+                            );
+
+                            return;
+                        }
+
+
+                        document.getElementById(
+                            'message'
+                        ).innerText =
+                            'Deleted: ' +
                             mod +
-                            '?\\n\\n' +
-                            'Server restart will be required.'
-                        )
-                    ) {
-                        return;
-                    }
+                            ' - Restart required';
 
 
-                    const r =
-                        await fetch(
-                            '/api/mods/' +
-                            encodeURIComponent(
-                                mod
-                            ),
-                            {
-                                method: 'DELETE'
-                            }
-                        );
+                        await loadMods();
+                    };
 
 
-                    const data =
-                        await r.json();
+                li.appendChild(
+                    button
+                );
 
+                ul.appendChild(
+                    li
+                );
+            }
+        );
 
-                    if (!r.ok) {
-
-                        alert(
-                            data.detail ||
-                            'Delete failed'
-                        );
-
-                        return;
-                    }
-
-
-                    document.getElementById(
-                        'message'
-                    ).innerText =
-                        'Deleted: ' +
-                        mod +
-                        ' - Restart required';
-
-
-                    await loadMods();
-                };
-
-
-            li.appendChild(
-                button
-            );
-
-            ul.appendChild(
-                li
-            );
-        });
 
     } catch (error) {
 
@@ -893,6 +1261,7 @@ async function uploadMod() {
 
         await loadMods();
 
+
     } catch (error) {
 
         document.getElementById(
@@ -909,140 +1278,7 @@ async function uploadMod() {
 
 
 // ============================================================
-// Safe Restart
-// ============================================================
-
-async function restartServer() {
-
-    if (
-        !confirm(
-            'Restart minecraft2?\\n\\n' +
-            'The world will be saved before restart.'
-        )
-    ) {
-
-        return;
-    }
-
-
-    const button =
-        document.getElementById(
-            'restartButton'
-        );
-
-    const status =
-        document.getElementById(
-            'status'
-        );
-
-
-    button.disabled =
-        true;
-
-
-    status.innerText =
-        'Restarting...';
-
-    status.className =
-        'status-running';
-
-
-    document.getElementById(
-        'message'
-    ).innerText =
-        'Saving world and stopping Minecraft...';
-
-
-    try {
-
-        const r =
-            await fetch(
-                '/api/restart',
-                {
-                    method: 'POST'
-                }
-            );
-
-
-        const data =
-            await r.json();
-
-
-        if (!r.ok) {
-
-            status.innerText =
-                'Restart Failed';
-
-            status.className =
-                'status-other';
-
-
-            document.getElementById(
-                'message'
-            ).innerText =
-                'Restart failed: ' +
-                (
-                    data.detail ||
-                    'Unknown error'
-                );
-
-
-            await loadLogs();
-
-            return;
-        }
-
-
-        /*
-         * /api/restart returns success only after the
-         * CURRENT Forge startup emits its Ready message.
-         */
-
-        status.innerText =
-            'Ready';
-
-        status.className =
-            'status-ready';
-
-
-        document.getElementById(
-            'message'
-        ).innerText =
-            'Forge is Ready';
-
-
-        await loadLogs();
-
-    } catch (error) {
-
-        status.innerText =
-            'Error';
-
-        status.className =
-            'status-other';
-
-
-        document.getElementById(
-            'message'
-        ).innerText =
-            'Restart request failed';
-
-    } finally {
-
-        button.disabled =
-            false;
-
-        /*
-         * Re-read the authoritative server status after
-         * restart processing has completed.
-         */
-        await loadStatus();
-    }
-}
-
-
-// ============================================================
-// Server Logs
+// Logs
 // ============================================================
 
 async function loadLogs() {
@@ -1075,11 +1311,14 @@ async function loadLogs() {
                 'logs'
             );
 
+
         logElement.innerText =
             data.logs;
 
+
         logElement.scrollTop =
             logElement.scrollHeight;
+
 
     } catch (error) {
 
@@ -1102,11 +1341,28 @@ loadMods();
 loadLogs();
 
 
-// Refresh authoritative status every 10 seconds.
+/*
+ * During restart this gives near-real-time GUI updates:
+ *
+ * Stopping...
+ * Starting...
+ * Waiting for Forge...
+ * Ready
+ */
 
 setInterval(
     loadStatus,
-    10000
+    2000
+);
+
+
+/*
+ * Refresh logs every 5 seconds.
+ */
+
+setInterval(
+    loadLogs,
+    5000
 );
 
 
@@ -1119,19 +1375,70 @@ setInterval(
 
 
 # ============================================================
-# API: Server Status
+# API: Status
 # ============================================================
 
 @app.get("/api/status")
 def status():
-    """
-    Return Forge status based on the CURRENT container run.
 
-    Old Done messages from previous starts are not used.
-    """
+    state = get_restart_state()
 
     return {
-        "status": get_display_status()
+        "status": get_display_status(),
+        "in_progress": state["in_progress"],
+        "phase": state["phase"],
+        "message": state["message"],
+        "error": state["error"]
+    }
+
+
+# ============================================================
+# API: Restart
+# ============================================================
+
+@app.post("/api/restart")
+def restart():
+
+    if not RCON_PASS:
+
+        raise HTTPException(
+            status_code=500,
+            detail="MCRCON_PASS is not configured"
+        )
+
+
+    with restart_lock:
+
+        if restart_state["in_progress"]:
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A restart is already in progress"
+                )
+            )
+
+        restart_state["in_progress"] = True
+        restart_state["phase"] = "stopping"
+        restart_state["message"] = (
+            "Saving world and stopping Minecraft..."
+        )
+        restart_state["error"] = None
+
+
+    worker = threading.Thread(
+        target=restart_worker,
+        daemon=True
+    )
+
+    worker.start()
+
+
+    return {
+        "message": (
+            "Saving world and stopping Minecraft..."
+        ),
+        "status": "accepted"
     }
 
 
@@ -1178,7 +1485,9 @@ def upload(
         file.filename
     )
 
-    destination = MOD_DIR / name
+    destination = (
+        MOD_DIR / name
+    )
 
 
     if destination.exists():
@@ -1207,15 +1516,17 @@ def upload(
                     1024 * 1024
                 )
 
-
                 if not chunk:
                     break
 
+                total_size += len(
+                    chunk
+                )
 
-                total_size += len(chunk)
-
-
-                if total_size > MAX_UPLOAD_SIZE:
+                if (
+                    total_size
+                    > MAX_UPLOAD_SIZE
+                ):
 
                     raise HTTPException(
                         status_code=413,
@@ -1224,7 +1535,6 @@ def upload(
                             "Maximum size is 500 MB."
                         )
                     )
-
 
                 output.write(
                     chunk
@@ -1275,7 +1585,9 @@ def delete_mod(
         filename
     )
 
-    target = MOD_DIR / name
+    target = (
+        MOD_DIR / name
+    )
 
 
     if not target.exists():
@@ -1298,14 +1610,12 @@ def delete_mod(
 
         target.unlink()
 
-
         return {
             "message": "deleted",
             "filename": name,
             "restart_required": True
         }
 
-
     except Exception as e:
 
         raise HTTPException(
@@ -1315,178 +1625,7 @@ def delete_mod(
 
 
 # ============================================================
-# API: Safe Restart + Current Forge Ready Check
-# ============================================================
-
-@app.post("/api/restart")
-def restart():
-
-    if not RCON_PASS:
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "MCRCON_PASS is not configured"
-            )
-        )
-
-
-    current_status = (
-        get_container_status()
-    )
-
-
-    if current_status != "running":
-
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "minecraft2 is not running. "
-                "Current status: "
-                + current_status
-            )
-        )
-
-
-    try:
-
-        # ====================================================
-        # STEP 1
-        #
-        # Ask Minecraft/Forge itself to stop.
-        #
-        # This allows Minecraft to save players, worlds,
-        # chunks and MOD state before Java exits.
-        # ====================================================
-
-        send_rcon(
-            "stop"
-        )
-
-
-        # ====================================================
-        # STEP 2
-        #
-        # Wait for a clean container exit.
-        #
-        # Do NOT automatically SIGKILL if shutdown fails.
-        # ====================================================
-
-        if not wait_for_clean_stop():
-
-            raise RuntimeError(
-                "Minecraft did not stop "
-                "cleanly within "
-                f"{STOP_TIMEOUT} seconds. "
-                "The server was NOT force-killed."
-            )
-
-
-        # ====================================================
-        # STEP 3
-        #
-        # Start the same minecraft2 container.
-        # ====================================================
-
-        podman(
-            "start",
-            CONTAINER
-        )
-
-
-        # ====================================================
-        # STEP 4
-        #
-        # Wait until Forge becomes Ready.
-        #
-        # wait_for_forge_ready() obtains the container's
-        # current .State.StartedAt timestamp and only examines
-        # logs generated since that start.
-        #
-        # Therefore a Done message from an older Forge run
-        # cannot cause a false Ready result.
-        # ====================================================
-
-        ready, startup_logs = (
-            wait_for_forge_ready()
-        )
-
-
-        # ====================================================
-        # STEP 5
-        #
-        # Forge failed to become Ready.
-        # ====================================================
-
-        if not ready:
-
-            final_status = (
-                get_container_status()
-            )
-
-
-            log_lines = (
-                startup_logs
-                .strip()
-                .splitlines()
-            )
-
-
-            log_tail = "\n".join(
-                log_lines[-20:]
-            )
-
-
-            raise RuntimeError(
-                "Forge did not become Ready "
-                f"within {FORGE_READY_TIMEOUT} "
-                "seconds. "
-                "Container status: "
-                f"{final_status}\n\n"
-                "Last startup logs:\n"
-                f"{log_tail}"
-            )
-
-
-        # ====================================================
-        # STEP 6
-        #
-        # Final authoritative verification.
-        #
-        # Do not return Ready unless the current container run
-        # still satisfies the same Ready test.
-        # ====================================================
-
-        if not is_forge_ready():
-
-            raise RuntimeError(
-                "Forge Ready message was detected, "
-                "but final Ready verification failed."
-            )
-
-
-        # ====================================================
-        # STEP 7
-        #
-        # Success.
-        # ====================================================
-
-        return {
-            "message": "Forge is Ready",
-            "status": "Ready"
-        }
-
-
-    except Exception as e:
-
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-
-# ============================================================
-# API: Server Logs
+# API: Logs
 # ============================================================
 
 @app.get("/api/logs")
@@ -1494,18 +1633,13 @@ def logs():
 
     try:
 
-        output = podman(
-            "logs",
-            "--tail",
-            "150",
-            CONTAINER
+        output = get_container_logs(
+            150
         )
-
 
         return {
             "logs": output
         }
-
 
     except Exception as e:
 
