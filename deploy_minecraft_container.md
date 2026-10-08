@@ -167,6 +167,10 @@ Minecraftコンテナ(バニラ)を作成しOCI(Oracle Linux9)にコンテナを
   podman exec minecraft1 sed -i 's/^enforce-whitelist=.*/enforce-whitelist=true/' /minecraft/server.properties 
   ```
 
+<br>
+<br>
+
+## 6. Install RCON
   - RCONパスワードを設定
   ```
   podman exec minecraft1 sed -i 's/^enable-rcon=.*/enable-rcon=true/' /minecraft/server.properties
@@ -196,10 +200,7 @@ podman exec minecraft1 sed -i 's/^rcon.password=.*/rcon.password=YOUR_STRONG_PAS
   ```
   podman port minecraft1
   ```
-<br>
-<br>
 
-## 6. Install RCON
   - mcrcon をインストール
   ```
   sudo dnf install -y git gcc make 
