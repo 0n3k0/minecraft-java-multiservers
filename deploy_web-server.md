@@ -33,31 +33,6 @@ Minecraft-forgeのアドミン用のwebサーバを構築する手順
           minecraft2
 
 
-┌────────────────────────────────────┐
-│ Minecraft Forge Server             │
-│                                    │
-│ Status: ● Running                  │
-│ Players: 2 / 10                    │
-│                                    │
-│ [ Restart Server ]  [ Stop ]       │
-│                                    │
-│ Mods                               │
-│ ────────────────────────────────   │
-│ jei-1.20.1.jar          [Delete]   │
-│ journeymap-1.20.1.jar   [Delete]   │
-│ create-1.20.1.jar       [Delete]   │
-│                                    │
-│ Upload MOD                         │
-│ [ Choose File ]                    │
-│ [ Upload ]                         │
-│                                    │
-│ Server Log                         │
-│ ────────────────────────────────   │
-│ Starting Minecraft server...       │
-│ Done (8.24s)!                      │
-└────────────────────────────────────┘
-
-
 <br>
 <br>
 
