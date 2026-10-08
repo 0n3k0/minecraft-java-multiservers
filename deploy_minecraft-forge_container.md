@@ -317,5 +317,91 @@ chmod +x entrypoint.sh
   loginctl show-user opc -p Linger
   ```
 
+<br>
+<br>
+
+## 8. Install RCON  
+  - RCONの設定確認
+  ```
+  grep -E '^(enable-rcon|rcon\.password|rcon\.port)=' \
+  /home/opc/minecraft/server2/server.properties
+  ```
+  - パスワード、ポートの設定
+  ```
+  podman exec minecraft2 sed -i 's/^enable-rcon=.*/enable-rcon=true/' /minecraft/server.properties
+  ```
+  ```
+  podman exec minecraft2 sed -i 's/^rcon.password=.*/rcon.password=YOUR_STRONG_PASSWORD/' /minecraft/server.properties 
+  ```
+  ```
+  podman unshare sed -i 's/^rcon.port=.*/rcon.port=25576/' /home/opc/minecraft/server2/server.properties
+  ```
+  - 確認
+  ```
+  grep -E '^(enable-rcon|rcon\.password|rcon\.port)='   /home/opc/minecraft/server2/server.properties
+  ```
+  - コンテナの作り直し
+  ```
+  podman stop minecraft2
+  podman rm minecraft2
+  ```
+  - 起動
+  ```
+　podman run -d \
+  --name minecraft2 \
+  -p 25566:25565 \
+  -p 127.0.0.1:25576:25576 \
+  -v /home/opc/minecraft/server2:/minecraft:Z \
+  localhost/minecraft-forge-server-1.20.1:latest
+  ```
+  - 確認 (25565/tcp -> 0.0.0.0:25566, 25576/tcp -> 127.0.0.1:25576)
+  ```
+  podman port minecraft2
+  ```
+  - 確認 (別sshから実施, 127.0.0.1:25576 が見えればOK)
+  ```
+  ss -lnt | grep 25576
+  ```
+  - RCONのテスト
+  ```
+  mcrcon -H 127.0.0.1 -P 25576 -p 'MY PASSWORD' "list"
+  ```
+
+<br>
+<br>
+
+## 9. Configure password for App  
+  - Webアプリ用にRCONパスワードを保存
+  ```
+  cd /home/opc/minecraft/admin-web
+  vi .env
+  ```
+  ```
+  MCRCON_PASS=ここにserver2のRCONパスワード
+  ```
+  - 権限設定
+  ```
+  chmod 600 .env
+  ls -l .env
+  ```
+  - FastAPI起動時にパスワードを読み込む設定
+  ```
+  cd /home/opc/minecraft/admin-web
+
+  set -a
+  source .env
+  set +a
+
+  source venv/bin/activate
+  ```
+  - 確認
+  ```
+  test -n "$MCRCON_PASS" && echo "RCON password loaded"
+  ```
+
+  
+
+
+
 
 
