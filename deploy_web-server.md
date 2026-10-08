@@ -27,7 +27,7 @@ Minecraft-forgeのアドミン用のwebサーバを構築する手順
        └── MOD Upload
               │
               ▼
- /home/opc/minecraft/server2/mods
+      /home/opc/minecraft/server2/mods
               │
               ▼
           minecraft2
@@ -42,10 +42,10 @@ Minecraft-forgeのアドミン用のwebサーバを構築する手順
 
 [1. Preparation](#1-Preparation)  
 [2. Create Web application](#2-Create-Web-application)  
-[3. Check mods directory](#3-Check-mods-directory)    
-[4. Run FastAPI](#4-Run-FastAPI)  
-[5. Enable whitelist](#5-Enable-whitelist)  
-[6. Install RCON](#6-Install-RCON)  
+[3. Check mods directory](#3-Check-mods-directory)  
+[4. Install ACL tool](#4-Install-ACL-tool)  
+[5. Run FastAPI](#4-Run-FastAPI)  
+[6. Check Web access](#6-Check-Web-access)  
 
 <br>
 <br>
@@ -97,13 +97,59 @@ python -m py_compile app.py
 ```
 podman unshare ls -ld /home/opc/minecraft/server2/mods
 ```
+<br>
+<br>
 
-## 4. Run FastAPI
+
+## 4. Install ACL tool
+- ACLツールのインストール
+```
+sudo dnf install -y acl
+```
+- modsディレクトリに権限を付与
+```
+sudo setfacl -m u:opc:rwx /home/opc/minecraft/server2/mods
+```
+- Webから新しくアップロードしたJARに適切なACLが継承されるようデフォルトACLを設定
+```
+sudo setfacl -m d:u:opc:rwx /home/opc/minecraft/server2/mods
+sudo setfacl -m d:u:100994:rwx /home/opc/minecraft/server2/mods
+```
+- 既存JARをWebから削除できるようにしておく
+```
+sudo setfacl -R -m u:opc:rwX /home/opc/minecraft/server2/mods
+```
+- ACLの確認 
+```
+getfacl /home/opc/minecraft/server2/mods
+```
+- opcから書き込みテスト
+```
+touch /home/opc/minecraft/server2/mods/test.txt
+```
+- 確認
+```
+ls -l /home/opc/minecraft/server2/mods/test.txt
+rm /home/opc/minecraft/server2/mods/test.txt
+```
+
+<br>
+<br>
+
+
+## 5. Run FastAPI
 注：この時点ではインターネットに公開しない
 - 
 ```
 cd /home/opc/minecraft/admin-web
 source venv/bin/activate
+```
+```
+set -a
+source .env
+set +a
+
+test -n "$MCRCON_PASS" && echo "RCON password loaded"
 ```
 
 - FastAPIの起動
@@ -116,7 +162,7 @@ uvicorn app:app \
 <br>
 <br>
 
-## 5. Checking access
+## 6. Check Web access
 注：自分のPCのブラウザからSSHトンネルでアクセス
 - SSHトンネルの作成
 ```
