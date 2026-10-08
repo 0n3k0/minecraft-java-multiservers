@@ -1,4 +1,4 @@
-# How to operate RCON to add/remove user to/from whitelist 
+# How to add/remove user to/from whitelist 
 RCONを使ってホワイトリストに接続を許可するユーザーを登録/削除する方法
 
 ---
